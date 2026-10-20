@@ -1,0 +1,6 @@
+# Keeps web/dist in version control.
+#
+# //go:embed all:dist needs the directory to exist and to contain at least one
+# file, so a fresh clone must be buildable before the frontend has ever been
+# built. Vite empties this directory on each build, so `make frontend`
+# recreates this file afterwards.

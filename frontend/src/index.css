@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-shell: #0b0f17;
+  --color-panel: #121722;
+  --color-edge: #222a38;
+  --color-ink: #e6eaf2;
+  --color-muted: #8c97ab;
+  --color-accent: #4f9dff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-shell);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+/* Highlight applied by the diff viewer to the selected change unit. */
+.codelearn-unit {
+  background: rgba(79, 157, 255, 0.16);
+}
+
+.codelearn-unit-margin {
+  border-left: 2px solid var(--color-accent);
+}
