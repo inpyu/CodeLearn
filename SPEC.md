@@ -54,7 +54,10 @@ coding agent such as Claude Code or Codex and attaches them to the code.
 ## 1.3 Core Principles
 
 **Local-first.** Git analysis, diff rendering and explanation storage all run
-locally.
+where CodeLearn is installed. *(Amended: a repository may live on another host,
+reached over SSH with `--remote`. CodeLearn still runs on the user's machine
+and stores everything there; only the git commands and working tree reads
+cross the connection, and nothing is installed on the host. See 5.6.)*
 
 **Pre-commit first.** The default subject is the working tree, with no commit
 or pull request required.
@@ -263,6 +266,28 @@ into a shell string. Git commands run through `exec.CommandContext`.
 Untracked files are new files with an empty Before. Renames detected by git
 keep both paths. Binary files are not passed to the diff viewer. Submodules
 show their change status only.
+
+## 5.6 Remote Repositories *(amended)*
+
+A repository may live on another host. CodeLearn runs where it is installed
+and drives git over SSH, so the host needs only `git` and a POSIX shell.
+
+Every repository operation goes through one of two methods - run a git
+command, read working tree files - which is what keeps the rest of the
+implementation unaware of which side of a connection the repository is on.
+
+Two requirements follow from the transport:
+
+- SSH passes its command to the remote login shell, and git arguments include
+  file paths taken from the repository, so **every argument must be shell
+  quoted**. This is a remote code execution boundary and is tested by driving
+  hostile file names through a real shell.
+- A round trip per file would dominate collection, so **connections are
+  multiplexed** over one SSH master and **working tree reads are batched**
+  into a single framed request.
+
+The analysis cache is keyed by the location a repository was opened from, so
+the same project on two hosts keeps separate explanations.
 
 ## 5.5 Snapshot Consistency
 

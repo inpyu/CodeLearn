@@ -155,7 +155,7 @@ func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, repositoryResponse{
 		Name:         snapshot.Repository,
-		Path:         s.repo.Root,
+		Path:         s.repo.Location(),
 		Branch:       snapshot.Branch,
 		Base:         snapshot.Base,
 		BaseCommit:   snapshot.BaseCommit,
@@ -235,7 +235,7 @@ func (s *Server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, analysis.StoredView(s.repo.Root, snapshot))
+	writeJSON(w, analysis.StoredView(s.repo.Location(), snapshot))
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {

@@ -292,12 +292,12 @@ func TestResolveInsideRefusesEscapes(t *testing.T) {
 	r.Commit("init")
 	repo, _ := git.Discover(context.Background(), r.Root)
 
-	for _, path := range []string{"../outside.txt", "../../etc/passwd", "a/../../x"} {
-		if _, err := repo.ResolveInside(path); err == nil {
+	for _, path := range []string{"../outside.txt", "../../etc/passwd", "a/../../x", "/etc/passwd"} {
+		if err := repo.CheckInside(path); err == nil {
 			t.Fatalf("%q was accepted", path)
 		}
 	}
-	if _, err := repo.ResolveInside("a.txt"); err != nil {
+	if err := repo.CheckInside("a.txt"); err != nil {
 		t.Fatalf("a.txt was rejected: %v", err)
 	}
 }

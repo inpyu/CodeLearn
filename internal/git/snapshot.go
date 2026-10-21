@@ -143,6 +143,16 @@ func trackedChanges(ctx context.Context, repo *Repository, baseRev, baseID strin
 	}
 	blobs := repo.ReadManyAtRev(ctx, baseRev, sources)
 
+	// The working tree side is batched too, so a remote repository costs one
+	// round trip here rather than one per changed file.
+	var present []string
+	for _, entry := range entries {
+		if entry.status != StatusDeleted {
+			present = append(present, entry.path)
+		}
+	}
+	worktree := repo.ReadWorktreeFiles(ctx, present)
+
 	var files []FileChange
 	for _, entry := range entries {
 		source := entry.path
@@ -157,7 +167,7 @@ func trackedChanges(ctx context.Context, repo *Repository, baseRev, baseID strin
 			before, beforeBinary = decodeText(data, ok)
 		}
 		if entry.status != StatusDeleted {
-			data, ok := repo.ReadWorktree(entry.path)
+			data, ok := worktree[entry.path]
 			after, afterBinary = decodeText(data, ok)
 		}
 
@@ -185,9 +195,12 @@ func untrackedChanges(ctx context.Context, repo *Repository, baseID string) ([]F
 	if err != nil {
 		return nil, err
 	}
+	paths := splitNUL(raw)
+	contents := repo.ReadWorktreeFiles(ctx, paths)
+
 	var files []FileChange
-	for _, path := range splitNUL(raw) {
-		data, ok := repo.ReadWorktree(path)
+	for _, path := range paths {
+		data, ok := contents[path]
 		after, binary := decodeText(data, ok)
 		file := FileChange{
 			Path:   path,

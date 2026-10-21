@@ -89,6 +89,12 @@ Flags for the viewer:
   --port <n>          port to bind (default %d, falls back to a free port)
   --host <addr>       host to bind (default %s)
 
+Working on another machine:
+  --remote [user@]host:/path/to/repo
+                      inspect a repository on that host over SSH. Only git and
+                      a POSIX shell are needed there; CodeLearn runs here.
+                      Accepted by the viewer, export and import.
+
 Flags for export:
   -o, --output <file> output file (default changes.json)
 
@@ -98,7 +104,25 @@ Other:
 `, Version, server.DefaultPort, server.DefaultHost)
 }
 
-func openRepository(ctx context.Context, path string, stderr io.Writer) (*git.Repository, int) {
+// openRepository opens a repository on this machine, or on another host when
+// --remote was given. The remote host needs git and a POSIX shell; CodeLearn
+// itself is never installed there.
+func openRepository(
+	ctx context.Context, path, remote string, stderr io.Writer,
+) (*git.Repository, int) {
+	if remote != "" {
+		target, err := git.ParseRemote(remote)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return nil, ExitInvalidInput
+		}
+		repo, err := git.DiscoverRemote(ctx, target.Transport(), target.Path)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return nil, ExitGitError
+		}
+		return repo, ExitOK
+	}
 	repo, err := git.Discover(ctx, path)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -107,18 +131,25 @@ func openRepository(ctx context.Context, path string, stderr io.Writer) (*git.Re
 	return repo, ExitOK
 }
 
+// remoteFlag registers --remote on a subcommand.
+func remoteFlag(flags *flag.FlagSet) *string {
+	return flags.String("remote", "",
+		"a repository on another host, as [user@]host:/path (needs git and ssh there)")
+}
+
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	noBrowser := flags.Bool("no-browser", false, "do not launch a browser")
 	port := flags.Int("port", server.DefaultPort, "port to bind")
 	host := flags.String("host", server.DefaultHost, "host to bind")
+	remote := remoteFlag(flags)
 	path, code := parse(flags, args, ".", stderr)
 	if code != ExitOK {
 		return code
 	}
 
-	repo, code := openRepository(ctx, path, stderr)
+	repo, code := openRepository(ctx, path, *remote, stderr)
 	if code != ExitOK {
 		return code
 	}
@@ -135,7 +166,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 
 	fmt.Fprintf(stdout, "CodeLearn v%s\n\n", Version)
-	fmt.Fprintf(stdout, "Repository: %s\n", repo.Root)
+	fmt.Fprintf(stdout, "Repository: %s\n", repo.Location())
 	fmt.Fprintf(stdout, "Branch: %s\n", snapshot.Branch)
 	fmt.Fprintf(stdout, "Changed Files: %d\n\n", len(snapshot.Files))
 	fmt.Fprintf(stdout, "Viewer: %s\n\n", srv.URL)
@@ -158,12 +189,13 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	flags.SetOutput(stderr)
 	output := flags.String("output", "changes.json", "output file")
 	flags.StringVar(output, "o", "changes.json", "output file")
+	remote := remoteFlag(flags)
 	path, code := parse(flags, args, ".", stderr)
 	if code != ExitOK {
 		return code
 	}
 
-	repo, code := openRepository(ctx, path, stderr)
+	repo, code := openRepository(ctx, path, *remote, stderr)
 	if code != ExitOK {
 		return code
 	}
@@ -188,6 +220,7 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("import", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	remote := remoteFlag(flags)
 	rest, code := positionals(flags, args, 2, stderr)
 	if code != ExitOK {
 		return code
@@ -202,7 +235,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		path = rest[1]
 	}
 
-	repo, code := openRepository(ctx, path, stderr)
+	repo, code := openRepository(ctx, path, *remote, stderr)
 	if code != ExitOK {
 		return code
 	}
@@ -212,7 +245,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return ExitGitError
 	}
 
-	result, err := analysis.ImportFile(repo.Root, snapshot, file)
+	result, err := analysis.ImportFile(repo.Location(), snapshot, file)
 	if err != nil {
 		if result != nil {
 			for _, problem := range result.Problems {

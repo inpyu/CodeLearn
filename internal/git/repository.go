@@ -19,22 +19,23 @@ import (
 // special handling anywhere downstream.
 const EmptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// commandTimeout bounds every git invocation so a hung git cannot hang the
-// viewer, which serves one request per git call.
+// commandTimeout bounds every git invocation so a hung git - or an
+// unresponsive SSH host - cannot hang the viewer.
 const commandTimeout = 30 * time.Second
 
 // ErrNotARepository is returned when a path is not inside a git repository.
 var ErrNotARepository = errors.New("not a git repository")
 
-// Repository is a local git repository, addressed by its root directory.
-// It caches nothing: every question is answered by running git again, so a
-// long running viewer can never serve a stale answer.
+// Repository is a git repository, addressed by its root directory and reached
+// through a transport. It caches nothing: every question is answered by
+// running git again, so a long running viewer can never serve a stale answer.
 type Repository struct {
-	Root string
+	Root      string
+	transport Transport
 }
 
-// Discover finds the repository containing path, which may be a file, a
-// directory, or empty for the working directory.
+// Discover finds the repository containing path on this machine, which may be
+// a file, a directory, or empty for the working directory.
 func Discover(ctx context.Context, path string) (*Repository, error) {
 	if path == "" {
 		path = "."
@@ -50,53 +51,76 @@ func Discover(ctx context.Context, path string) (*Repository, error) {
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
+	repo, err := discoverWith(ctx, Local(), abs, path)
+	if err != nil {
+		return nil, err
+	}
+	// Resolving symlinks here is what makes the containment check sound: it
+	// assumes both sides are already resolved.
+	if real, err := filepath.EvalSymlinks(repo.Root); err == nil {
+		repo.Root = real
+	}
+	return repo, nil
+}
+
+// DiscoverRemote finds the repository containing path on a transport's host.
+// Nothing is installed there: it only needs git and a POSIX shell.
+func DiscoverRemote(ctx context.Context, transport Transport, path string) (*Repository, error) {
+	if path == "" {
+		return nil, fmt.Errorf("a remote repository needs a path")
+	}
+	return discoverWith(ctx, transport, path, path)
+}
+
+func discoverWith(ctx context.Context, transport Transport, dir, shown string) (*Repository, error) {
 	// Let git resolve the root rather than walking up looking for a .git
 	// directory: that is what makes worktrees and submodules work for free.
-	out, err := runIn(ctx, abs, "rev-parse", "--show-toplevel")
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	out, err := transport.Run(ctx, dir, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotARepository, path)
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("git executable not found: %w", err)
+		}
+		return nil, fmt.Errorf("%w: %s (%s)", ErrNotARepository, shown, transport.Label())
 	}
-	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
-	if err != nil {
-		root = strings.TrimSpace(string(out))
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return nil, fmt.Errorf("%w: %s", ErrNotARepository, shown)
 	}
-	return &Repository{Root: root}, nil
+	return &Repository{Root: root, transport: transport}, nil
 }
 
 // Name is the repository's directory name. Git has no authoritative project
-// name - a remote may be absent or renamed - so the directory is the one
-// label that always exists and matches what the user typed.
+// name - a remote may be absent or renamed - so the directory is the one label
+// that always exists and matches what the user typed.
 func (r *Repository) Name() string {
-	return filepath.Base(r.Root)
+	return filepath.Base(filepath.ToSlash(r.Root))
 }
 
-func runIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	// core.quotepath=false keeps non-ASCII paths unescaped. Arguments are
-	// passed as a slice, never interpolated into a shell string.
-	full := append([]string{"-C", dir, "-c", "core.quotepath=false"}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("git %s timed out", strings.Join(args, " "))
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+// Location describes where the repository lives, for the CLI banner.
+func (r *Repository) Location() string {
+	if r.transport.Label() == "local" {
+		return r.Root
 	}
-	return stdout.Bytes(), nil
+	return r.transport.Label() + r.Root
 }
+
+// Remote reports whether the repository lives on another host.
+func (r *Repository) Remote() bool { return r.transport.Label() != "local" }
 
 // RunBytes executes a git command in the repository and returns raw stdout.
 // Bytes rather than a string, because the caller decides what counts as text.
 func (r *Repository) RunBytes(ctx context.Context, args ...string) ([]byte, error) {
-	return runIn(ctx, r.Root, args...)
+	return r.runWithInput(ctx, nil, args...)
+}
+
+func (r *Repository) runWithInput(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	// core.quotepath=false keeps non-ASCII paths unescaped.
+	full := append([]string{"-c", "core.quotepath=false"}, args...)
+	return r.transport.Run(ctx, r.Root, stdin, full...)
 }
 
 // Run executes a git command and returns stdout as a string.
@@ -145,6 +169,7 @@ func (r *Repository) BaseRev(ctx context.Context) string {
 // not on disk at all, so it has to come from the object store. A missing path
 // reports ok=false rather than an error, which is what lets an added file flow
 // through the same code path as a modified one.
+//
 // An empty rev lets the caller pass a complete object name, such as ":path"
 // for stage 0 of the index.
 func (r *Repository) ReadAtRev(ctx context.Context, rev, path string) ([]byte, bool) {
@@ -159,55 +184,57 @@ func (r *Repository) ReadAtRev(ctx context.Context, rev, path string) ([]byte, b
 	return out, true
 }
 
-// ResolveInside resolves a repository-relative path and refuses anything that
-// escapes the repository. Resolving before comparing is the part that matters:
-// it collapses ".." segments and follows symlinks first.
-func (r *Repository) ResolveInside(path string) (string, error) {
-	if filepath.IsAbs(path) {
-		return "", fmt.Errorf("absolute path not allowed: %s", path)
+// CheckInside refuses a repository-relative path that would escape it.
+//
+// Paths reach this layer from the HTTP API and from imported analyses, so
+// traversal is rejected outright rather than cleaned away: filepath.Clean
+// would quietly rewrite "../x" into "x", turning an attack into a successful
+// read of a different file.
+func (r *Repository) CheckInside(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty path")
 	}
-	// Reject traversal outright rather than letting Clean rewrite it: an
-	// escaping path must be an error, not a silent read of a different file.
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "/") {
+		return fmt.Errorf("absolute path not allowed: %s", path)
+	}
 	cleaned := filepath.ToSlash(filepath.Clean(path))
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "/../") {
-		return "", fmt.Errorf("path escapes the repository: %s", path)
+		return fmt.Errorf("path escapes the repository: %s", path)
 	}
-	joined := filepath.Join(r.Root, cleaned)
-	resolved := joined
-	if real, err := filepath.EvalSymlinks(joined); err == nil {
-		resolved = real
-	}
-	rel, err := filepath.Rel(r.Root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes the repository: %s", path)
-	}
-	return joined, nil
+	return nil
 }
 
-// ReadWorktree reads a working tree file. This is the only function that
-// touches the filesystem directly, which is why the containment check is here.
-func (r *Repository) ReadWorktree(path string) ([]byte, bool) {
-	target, err := r.ResolveInside(path)
-	if err != nil {
-		return nil, false
+// ReadWorktree reads one working tree file.
+func (r *Repository) ReadWorktree(ctx context.Context, path string) ([]byte, bool) {
+	files := r.ReadWorktreeFiles(ctx, []string{path})
+	data, ok := files[path]
+	return data, ok
+}
+
+// ReadWorktreeFiles reads many working tree files at once.
+//
+// Batching matters for a remote repository, where a round trip per file would
+// dominate collection; the local transport simply loops.
+func (r *Repository) ReadWorktreeFiles(ctx context.Context, paths []string) map[string][]byte {
+	safe := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if r.CheckInside(path) == nil {
+			safe = append(safe, path)
+		}
 	}
-	info, err := os.Lstat(target)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, false
+	if len(safe) == 0 {
+		return map[string][]byte{}
 	}
-	data, err := os.ReadFile(target)
-	if err != nil {
-		return nil, false
-	}
-	return data, true
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	return r.transport.ReadFiles(ctx, r.Root, safe)
 }
 
 // ReadManyAtRev reads many blobs from one revision in a single git process.
 //
 // Reading the "before" side one `git show` at a time costs one subprocess per
-// changed file, which dominates collection on a large change: a thousand
-// modified files meant a thousand process spawns. `cat-file --batch` streams
-// them all through one process instead.
+// changed file - and, on a remote repository, one round trip per file.
+// `cat-file --batch` streams them all through one invocation.
 func (r *Repository) ReadManyAtRev(ctx context.Context, rev string, paths []string) map[string][]byte {
 	result := make(map[string][]byte, len(paths))
 	var batched []string
@@ -226,19 +253,12 @@ func (r *Repository) ReadManyAtRev(ctx context.Context, rev string, paths []stri
 		return result
 	}
 
-	var input bytes.Buffer
+	var input strings.Builder
 	for _, path := range batched {
 		input.WriteString(rev + ":" + path + "\n")
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git",
-		"-C", r.Root, "-c", "core.quotepath=false", "cat-file", "--batch")
-	cmd.Stdin = &input
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
+	out, err := r.runWithInput(ctx, []byte(input.String()), "cat-file", "--batch")
+	if err != nil {
 		// Fall back to one call per path rather than losing the before side.
 		for _, path := range batched {
 			if data, ok := r.ReadAtRev(ctx, rev, path); ok {
@@ -247,8 +267,7 @@ func (r *Repository) ReadManyAtRev(ctx context.Context, rev string, paths []stri
 		}
 		return result
 	}
-
-	parseBatch(stdout.Bytes(), batched, result)
+	parseBatch(out, batched, result)
 	return result
 }
 

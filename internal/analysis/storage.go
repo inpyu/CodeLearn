@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"time"
@@ -33,16 +34,16 @@ func CacheRoot() (string, error) {
 	return filepath.Join(base, "codelearn"), nil
 }
 
-// RepositoryID identifies a repository by its normalised root path. The
-// directory name alone collides between two clones of one project, and a bare
-// hash is unreadable when inspecting the cache, so both are used.
-func RepositoryID(root string) string {
-	normalised, err := filepath.Abs(root)
-	if err != nil {
-		normalised = root
-	}
-	sum := sha256.Sum256([]byte(filepath.Clean(normalised)))
-	return filepath.Base(normalised) + "-" + hex.EncodeToString(sum[:])[:12]
+// RepositoryID identifies a repository by the location it was opened from -
+// an absolute path, or "ssh://user@host/path" for a remote one.
+//
+// The directory name alone collides between two clones of one project, and
+// between the same path on two hosts; a bare hash is unreadable when
+// inspecting the cache. Both are used, so the same project on a laptop and on
+// a server keep separate analyses.
+func RepositoryID(location string) string {
+	sum := sha256.Sum256([]byte(path.Clean(filepath.ToSlash(location))))
+	return path.Base(filepath.ToSlash(location)) + "-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func repositoryDir(root string) (string, error) {
