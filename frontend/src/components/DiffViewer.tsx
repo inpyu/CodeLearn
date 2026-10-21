@@ -1,9 +1,11 @@
-import { Suspense, lazy } from 'react'
+import { Suspense } from 'react'
 
+import { lazyWithReload } from '../lib/lazyChunk'
 import type { ChangedFile, FileDiff } from '../types'
 
-// Monaco is loaded only once a file is actually opened.
-const DiffEditorPane = lazy(() => import('./DiffEditorPane'))
+// Monaco is loaded only once a file is actually opened, and the loader
+// recovers when the chunk's name has moved on under an open tab.
+const DiffEditorPane = lazyWithReload(() => import('./DiffEditorPane'))
 
 interface Props {
   file: ChangedFile | null

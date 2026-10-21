@@ -193,3 +193,34 @@ describe('layout', () => {
     expect(panel).toHaveStyle({ width: '256px' })
   })
 })
+
+describe('staying in step with the server', () => {
+  it('refetches the open file when a refresh moves the snapshot', async () => {
+    const requested: string[] = []
+    stubAPI({ onDiff: (path) => requested.push(path), snapshotMovesOnRefresh: true })
+    render(<App />)
+
+    await screen.findByText('Changed Files')
+    await waitFor(() => expect(requested).toEqual([cacheFile.path]))
+
+    // Pressing Refresh is how the reader asks to see their latest edits. The
+    // diff of the file they are looking at has to come along with them.
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(requested).toEqual([cacheFile.path, cacheFile.path]))
+  })
+
+  it('does not refetch when the snapshot did not move', async () => {
+    const requested: string[] = []
+    stubAPI({ onDiff: (path) => requested.push(path) })
+    render(<App />)
+
+    await screen.findByText('Changed Files')
+    await waitFor(() => expect(requested).toEqual([cacheFile.path]))
+
+    // An unchanged snapshot id is proof the file's content is unchanged, so
+    // refetching it would be wasted work.
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(requested).toEqual([cacheFile.path])
+  })
+})

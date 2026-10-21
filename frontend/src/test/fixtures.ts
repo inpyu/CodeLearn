@@ -120,6 +120,8 @@ export function stubAPI(overrides: {
   diffs?: Record<string, FileDiff>
   onDiff?: (path: string) => void
   onRefresh?: () => void
+  /** When true, each refresh reports a new snapshot id, as a real edit would. */
+  snapshotMovesOnRefresh?: boolean
 } = {}) {
   const files = overrides.files ?? [cacheFile, notesFile]
   const diffs = overrides.diffs ?? {
@@ -127,6 +129,7 @@ export function stubAPI(overrides: {
     [notesFile.path]: notesDiff,
   }
   const analysisBody = overrides.analysis ?? analysis
+  let snapshot = repository.snapshot_id
 
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : (input as Request).url
@@ -138,13 +141,16 @@ export function stubAPI(overrides: {
 
     if (url.startsWith('/api/refresh')) {
       overrides.onRefresh?.()
-      return json({ snapshot_id: repository.snapshot_id, changed_files: files.length })
+      if (overrides.snapshotMovesOnRefresh) {
+        snapshot = 'sha256:' + 'b'.repeat(64)
+      }
+      return json({ snapshot_id: snapshot, changed_files: files.length })
     }
     if (url.startsWith('/api/repository')) {
-      return json({ ...repository, changed_files: files.length })
+      return json({ ...repository, snapshot_id: snapshot, changed_files: files.length })
     }
     if (url.startsWith('/api/changes')) {
-      return json({ snapshot_id: repository.snapshot_id, files })
+      return json({ snapshot_id: snapshot, files })
     }
     if (url.startsWith('/api/analysis')) {
       return json(analysisBody)

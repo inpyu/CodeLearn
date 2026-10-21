@@ -20,6 +20,8 @@ const EMPTY_ANALYSIS: Analysis = {
 
 export interface ViewerState {
   repository: RepositoryInfo | null
+  /** The snapshot everything on screen was read from. */
+  snapshotId: string | null
   files: ChangedFile[]
   analysis: Analysis
   diff: FileDiff | null
@@ -43,6 +45,7 @@ export interface ViewerState {
  */
 export function useViewerState(): ViewerState {
   const [repository, setRepository] = useState<RepositoryInfo | null>(null)
+  const [snapshotId, setSnapshotId] = useState<string | null>(null)
   const [files, setFiles] = useState<ChangedFile[]>([])
   const [analysis, setAnalysis] = useState<Analysis>(EMPTY_ANALYSIS)
   const [diff, setDiff] = useState<FileDiff | null>(null)
@@ -74,6 +77,9 @@ export function useViewerState(): ViewerState {
       )
       .then(([repositoryInfo, changes, analysisView]) => {
         setRepository(repositoryInfo)
+        // The diff is reloaded when this moves, so pressing Refresh brings
+        // the open file's code along with the file list.
+        setSnapshotId(changes.snapshot_id)
         setFiles(changes.files)
         setAnalysis(analysisView)
         setError(null)
@@ -103,10 +109,16 @@ export function useViewerState(): ViewerState {
   useEffect(() => load(false), [load])
 
   // Load the selected file's code, cancelling whatever was in flight.
+  //
+  // This tracks the snapshot as well as the selection. A refresh that finds
+  // new edits produces a new snapshot id, and without it the pane would keep
+  // showing the previous snapshot's code and unit ids - so every unit would
+  // read as unexplained even though the analysis matched.
   useEffect(() => {
     diffRequest.current?.abort()
-    if (!selectedFile) {
+    if (!selectedFile || !snapshotId) {
       setDiff(null)
+      setDiffLoading(false)
       return
     }
     const controller = new AbortController()
@@ -133,7 +145,7 @@ export function useViewerState(): ViewerState {
         if (!controller.signal.aborted) setDiffLoading(false)
       })
     return () => controller.abort()
-  }, [selectedFile])
+  }, [selectedFile, snapshotId])
 
   const selectFile = useCallback((path: string) => {
     setSelectedFile(path)
@@ -146,6 +158,7 @@ export function useViewerState(): ViewerState {
 
   return {
     repository,
+    snapshotId,
     files,
     analysis,
     diff,

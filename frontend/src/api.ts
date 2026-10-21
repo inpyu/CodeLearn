@@ -1,7 +1,23 @@
 import type { Analysis, ChangedFile, FileDiff, RepositoryInfo } from './types'
 
+/**
+ * Reads a JSON endpoint, retrying once if the connection itself failed.
+ *
+ * The viewer is often reached across an SSH tunnel or a VPN, where a dropped
+ * connection surfaces as a rejected fetch with no status at all. One retry
+ * turns a blip into a pause instead of an error in the header. A response
+ * that arrived with an error status is not retried: the server answered, and
+ * asking again would give the same answer.
+ */
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, { headers: { Accept: 'application/json' }, signal })
+  let response: Response
+  try {
+    response = await fetch(path, { headers: { Accept: 'application/json' }, signal })
+  } catch (cause) {
+    if (signal?.aborted) throw cause
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    response = await fetch(path, { headers: { Accept: 'application/json' }, signal })
+  }
   if (!response.ok) {
     const detail = await response
       .json()

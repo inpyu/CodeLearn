@@ -34,6 +34,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A rebuild no longer breaks an open tab.** Every asset is content-hashed, so
+  rebuilding CodeLearn renames the lazily loaded Monaco chunk and the name the
+  open page holds stops existing. The failed import used to take the whole
+  viewer down to a blank page. The page now reloads itself once — the only
+  thing that can fix a stale manifest — and a new error boundary shows
+  anything else rather than blanking.
+- **Refresh now brings the open file's code with it.** The diff was reloaded
+  only when the selected file changed, so refreshing while reading a file left
+  the previous snapshot's code and unit ids on screen — and every unit read as
+  unexplained because the analysis had moved on. The diff now follows the
+  snapshot id.
+- A read whose connection drops is retried once, so a blip on an SSH tunnel or
+  a VPN is a pause rather than an error. A response the server actually sent
+  is never retried.
 - A brace inside a **multi-line block comment** no longer ends the enclosing
   function early, and code quoted inside a **multi-line raw string** is no
   longer matched as a declaration — the outline used to invent a symbol that
