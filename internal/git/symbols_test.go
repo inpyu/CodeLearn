@@ -206,3 +206,64 @@ func TestBlockCommentBracesDoNotConfuseTheScanner(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestStrayBraceInAMultiLineBlockCommentDoesNotEndAFunction(t *testing.T) {
+	source := "package m\n\nfunc Alpha() int {\n\t/*\n\t   a stray } here\n\t*/\n\treturn 1\n}\n\nfunc Beta() int {\n\treturn 2\n}\n"
+
+	symbols := git.Outline("x.go", source)
+	if len(symbols) != 2 {
+		t.Fatalf("symbols = %v", outlineNames("x.go", source))
+	}
+	if symbols[0].Start != 3 || symbols[0].End != 8 {
+		t.Fatalf("Alpha = %d-%d, want 3-8", symbols[0].Start, symbols[0].End)
+	}
+}
+
+func TestBlockDocCommentBelongsToItsSymbol(t *testing.T) {
+	source := "package m\n\n/* Run does the thing. */\nfunc Run() int {\n\treturn 1\n}\n"
+
+	if got := git.Outline("x.go", source)[0].Start; got != 3 {
+		t.Fatalf("start = %d, want 3", got)
+	}
+}
+
+func TestMultiLineBlockDocCommentBelongsToItsSymbol(t *testing.T) {
+	source := "const x = 1\n\n/**\n * Run does the thing.\n */\nexport function Run() {\n  return 1\n}\n"
+
+	run := git.Outline("x.ts", source)[0]
+	if run.Start != 3 || run.End != 8 {
+		t.Fatalf("Run = %d-%d, want 3-8", run.Start, run.End)
+	}
+}
+
+func TestCodeInsideARawStringIsNotASymbol(t *testing.T) {
+	source := "package m\n\nconst tmpl = `\nfunc NotReal() int {\n\treturn 1\n}\n`\n\nfunc Real() int {\n\treturn 2\n}\n"
+
+	// A raw string spans lines, so without carrying that state the scanner
+	// used to invent a symbol out of the string's contents.
+	got := outlineNames("x.go", source)
+	if !equal(got, []string{"function:Real"}) {
+		t.Fatalf("got %v", got)
+	}
+	if real := git.Outline("x.go", source)[0]; real.Start != 9 {
+		t.Fatalf("Real starts at %d, want 9", real.Start)
+	}
+}
+
+func TestATemplateLiteralIsNotMistakenForACommentAboveASymbol(t *testing.T) {
+	source := "const sql = `\n  SELECT { a }\n`\n\nexport function After() {\n  return 1\n}\n"
+
+	after := git.Outline("x.ts", source)[0]
+	if after.Start != 5 || after.End != 7 {
+		t.Fatalf("After = %d-%d, want 5-7", after.Start, after.End)
+	}
+}
+
+func TestABraceInAQuotedStringIsIgnored(t *testing.T) {
+	source := "package m\n\nfunc Alpha() string {\n\treturn \"a { brace\"\n}\n\nfunc Beta() int {\n\treturn 2\n}\n"
+
+	symbols := git.Outline("x.go", source)
+	if len(symbols) != 2 || symbols[0].End != 5 {
+		t.Fatalf("symbols = %v", outlineNames("x.go", source))
+	}
+}

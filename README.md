@@ -131,6 +131,9 @@ file, it cuts the change along symbol boundaries instead:
 
 Outlines are produced by scanning, with no parser dependency, and are best
 effort: a file CodeLearn cannot outline falls back to hunks and still works.
+The scan strips comments and string literals, carrying that state across
+lines, so a brace inside a block comment does not end a function early and
+code quoted inside a raw string is never mistaken for a declaration.
 Multi-line signatures, generics, generic arrow functions and multi-line type
 aliases are handled; deeply unusual syntax may still fall back to a module
 level unit, which is harmless because a unit never points at the wrong code.

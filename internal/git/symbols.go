@@ -42,17 +42,41 @@ func Outline(path, text string) []Symbol {
 		return nil
 	}
 	lines := strings.Split(text, "\n")
-	switch extensionOf(path) {
-	case "py":
-		return attachComments(pythonOutline(lines), lines, "#")
-	case "go":
-		return attachComments(braceOutline(lines, goPatterns, false), lines, "//")
-	case "js", "jsx", "mjs", "cjs", "ts", "tsx":
-		return attachComments(braceOutline(lines, jsPatterns, true), lines, "//")
-	case "c", "cc", "cpp", "cxx", "h", "hpp", "java", "cs", "rs", "swift", "kt":
-		return attachComments(braceOutline(lines, cPatterns, true), lines, "//")
+	blank := func(index int) bool {
+		return index < 0 || index >= len(lines) || strings.TrimSpace(lines[index]) == ""
 	}
-	return nil
+
+	if extensionOf(path) == "py" {
+		hash := func(index int) bool {
+			return index >= 0 && index < len(lines) &&
+				strings.HasPrefix(strings.TrimSpace(lines[index]), "#")
+		}
+		return attachComments(pythonOutline(lines), hash, blank)
+	}
+
+	patterns, methods, ok := bracePatterns(extensionOf(path))
+	if !ok {
+		return nil
+	}
+	cleaned, commentOnly := scanComments(lines)
+	comment := func(index int) bool {
+		return index >= 0 && index < len(commentOnly) && commentOnly[index]
+	}
+	return attachComments(braceOutline(cleaned, patterns, methods), comment, blank)
+}
+
+// bracePatterns selects the declaration patterns for a brace language, and
+// reports whether class members are worth scanning for in it.
+func bracePatterns(extension string) (patterns []pattern, methods, ok bool) {
+	switch extension {
+	case "go":
+		return goPatterns, false, true
+	case "js", "jsx", "mjs", "cjs", "ts", "tsx":
+		return jsPatterns, true, true
+	case "c", "cc", "cpp", "cxx", "h", "hpp", "java", "cs", "rs", "swift", "kt":
+		return cPatterns, true, true
+	}
+	return nil, false, false
 }
 
 func extensionOf(path string) string {
@@ -222,10 +246,12 @@ var methodPattern = regexp.MustCompile(
 
 var methodKeywords = map[string]bool{"if": true, "for": true, "while": true, "switch": true, "catch": true}
 
-func braceOutline(lines []string, patterns []pattern, withMethods bool) []Symbol {
+// braceOutline works from code with comments and strings already removed, so
+// a declaration that only appears inside a comment or a string is not matched.
+func braceOutline(cleaned []string, patterns []pattern, withMethods bool) []Symbol {
 	var symbols []Symbol
-	for index := 0; index < len(lines); index++ {
-		line := lines[index]
+	for index := 0; index < len(cleaned); index++ {
+		line := cleaned[index]
 		if strings.TrimSpace(line) == "" || leadingSpaces(line) > 0 {
 			continue
 		}
@@ -233,12 +259,12 @@ func braceOutline(lines []string, patterns []pattern, withMethods bool) []Symbol
 		if !ok {
 			continue
 		}
-		endIndex := blockEnd(lines, index)
+		endIndex := blockEnd(cleaned, index)
 		start, end := index+1, endIndex+1
 
 		var methods []Symbol
 		if withMethods && kind == KindClass {
-			methods = classMethods(lines, index+1, endIndex, name)
+			methods = classMethods(cleaned, index+1, endIndex, name)
 		}
 		own := end
 		if len(methods) > 0 {
@@ -265,43 +291,87 @@ func matchPatterns(line string, patterns []pattern) (string, string, bool) {
 	return "", "", false
 }
 
-// clean strips string literals and line comments so brace counting is reliable.
-func clean(line string) string {
-	var out strings.Builder
-	var quote byte
-	for index := 0; index < len(line); index++ {
-		char := line[index]
-		if quote != 0 {
-			if char == '\\' {
-				index++
-				continue
+// scanComments returns each line with its comments and string literals
+// removed, so brace counting and pattern matching only ever see code.
+//
+// The scan carries state between lines, which is what the previous per-line
+// cleaner could not do: a brace inside a block comment that spans several
+// lines used to end a function early, and a multi-line raw string containing
+// code used to invent a symbol that does not exist.
+func scanComments(lines []string) (cleaned []string, commentOnly []bool) {
+	cleaned = make([]string, len(lines))
+	commentOnly = make([]bool, len(lines))
+	inComment := false
+	inRaw := false
+
+	for index, line := range lines {
+		var out strings.Builder
+		var quote byte
+		sawComment, sawString := false, false
+
+		for at := 0; at < len(line); at++ {
+			char := line[at]
+
+			switch {
+			case inComment:
+				sawComment = true
+				if char == '*' && at+1 < len(line) && line[at+1] == '/' {
+					inComment = false
+					at++
+				}
+			case inRaw:
+				sawString = true
+				// A raw string ends only at its closing backtick; it has no
+				// escapes, so the character before it is irrelevant.
+				if char == '`' {
+					inRaw = false
+				}
+			case quote != 0:
+				sawString = true
+				if char == '\\' {
+					at++
+				} else if char == quote {
+					quote = 0
+				}
+			case char == '`':
+				inRaw = true
+				sawString = true
+			case char == '"' || char == '\'':
+				quote = char
+				sawString = true
+			case char == '/' && at+1 < len(line) && line[at+1] == '/':
+				sawComment = true
+				at = len(line) // the rest of the line is a comment
+			case char == '/' && at+1 < len(line) && line[at+1] == '*':
+				inComment = true
+				sawComment = true
+				at++
+			default:
+				out.WriteByte(char)
 			}
-			if char == quote {
-				quote = 0
-			}
-			continue
 		}
-		if char == '"' || char == '\'' || char == '`' {
-			quote = char
-			continue
-		}
-		if char == '/' && index+1 < len(line) && (line[index+1] == '/' || line[index+1] == '*') {
-			break
-		}
-		out.WriteByte(char)
+
+		// A quoted string does not continue onto the next line in these
+		// languages; a block comment and a raw string do.
+		quote = 0
+		cleaned[index] = out.String()
+		// Why a line ended up empty matters: a comment above a definition
+		// belongs to it, but the inside of a multi-line string does not.
+		commentOnly[index] = sawComment && !sawString &&
+			strings.TrimSpace(out.String()) == "" && strings.TrimSpace(line) != ""
 	}
-	return out.String()
+	return cleaned, commentOnly
 }
 
 // blockEnd finds the line closing the block that opens at startIndex. Brace
 // depth is only counted outside parentheses, so a destructured parameter list
 // spread over several lines is not mistaken for the body.
-func blockEnd(lines []string, startIndex int) int {
+func blockEnd(cleaned []string, startIndex int) int {
 	depth, paren := 0, 0
 	opened := false
 	lastContinued := startIndex
-	for index := startIndex; index < len(lines); index++ {
-		text := clean(lines[index])
+	for index := startIndex; index < len(cleaned); index++ {
+		text := cleaned[index]
 		for _, char := range text {
 			switch char {
 			case '(':
@@ -332,7 +402,7 @@ func blockEnd(lines []string, startIndex int) int {
 			// as long as its lines are indented or open with a continuation
 			// token, so a union spread over several lines stays one symbol
 			// instead of being clipped to its first line.
-			if !isContinuation(lines[index]) {
+			if !isContinuation(cleaned[index]) {
 				return lastContinued
 			}
 			lastContinued = index
@@ -341,7 +411,7 @@ func blockEnd(lines []string, startIndex int) int {
 	if !opened {
 		return lastContinued
 	}
-	return len(lines) - 1
+	return len(cleaned) - 1
 }
 
 // isContinuation reports whether a line carries on the declaration above it.
@@ -360,14 +430,14 @@ func isContinuation(line string) bool {
 	return false
 }
 
-func classMethods(lines []string, first, last int, owner string) []Symbol {
+func classMethods(cleaned []string, first, last int, owner string) []Symbol {
 	var methods []Symbol
 	for index := first; index < last; index++ {
-		m := methodPattern.FindStringSubmatch(lines[index])
+		m := methodPattern.FindStringSubmatch(cleaned[index])
 		if m == nil || methodKeywords[m[1]] {
 			continue
 		}
-		end := blockEnd(lines, index)
+		end := blockEnd(cleaned, index)
 		if end > last {
 			end = last
 		}
@@ -377,9 +447,13 @@ func classMethods(lines []string, first, last int, owner string) []Symbol {
 	return methods
 }
 
-// attachComments pulls the comment block above a definition into it: a section
-// comment explains the symbol that follows, so it belongs to that unit.
-func attachComments(symbols []Symbol, lines []string, prefix string) []Symbol {
+// attachComments pulls the comment block above a definition into it: a doc
+// or section comment explains the symbol that follows, so it belongs to that
+// unit rather than floating as a module level fragment.
+//
+// isComment decides what a comment line is, which differs by language: a
+// brace language has "//" and "/* ... */" blocks, Python has "#".
+func attachComments(symbols []Symbol, isComment func(index int) bool, blank func(index int) bool) []Symbol {
 	for i := range symbols {
 		floor := 1
 		for _, earlier := range symbols[:i] {
@@ -388,22 +462,15 @@ func attachComments(symbols []Symbol, lines []string, prefix string) []Symbol {
 			}
 		}
 		start := symbols[i].Start
-		for start > floor {
-			text := ""
-			if start-2 < len(lines) {
-				text = strings.TrimSpace(lines[start-2])
-			}
-			if text != "" && !strings.HasPrefix(text, prefix) {
-				break
-			}
+		for start > floor && (isComment(start-2) || blank(start-2)) {
 			start--
 		}
 		// Trim the blank lines the walk passed over, so the unit begins at the
 		// comment itself rather than at the gap above it.
-		for start < symbols[i].Start && strings.TrimSpace(lines[start-1]) == "" {
+		for start < symbols[i].Start && blank(start-1) {
 			start++
 		}
-		if start < symbols[i].Start && strings.HasPrefix(strings.TrimSpace(lines[start-1]), prefix) {
+		if start < symbols[i].Start && isComment(start-1) {
 			symbols[i].Start = start
 		}
 	}
