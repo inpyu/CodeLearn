@@ -133,7 +133,36 @@ check "a cross-origin write is refused" test "$(curl -s -o /dev/null -w '%{http_
 
 echo "== 8. an unrelated edit keeps the explanation =="
 printf 'more\n' > "$REPO/other.txt"
+# Reads are served from the cached snapshot, so a refresh is what picks up
+# edits - the same thing the viewer's Refresh button does.
+curl -s -X POST "$URL/api/refresh" >/dev/null
 check "the step survives an unrelated change" contains "$(curl -s "$URL/api/analysis")" '"title":"Cache reuse"'
+
+echo "== 8b. a staged change reverted on disk is still visible =="
+printf 'staged only\n' > "$REPO/staged.txt"
+git -C "$REPO" add staged.txt
+rm "$REPO/staged.txt"
+curl -s -X POST "$URL/api/refresh" >/dev/null
+check "an index-only change is listed" contains "$(curl -s "$URL/api/changes")" '"index_only":true'
+
+echo "== 8c. moving a function does not invalidate its explanation =="
+cat > "$REPO/cache.go" <<'EOF'
+package cache
+
+import "os"
+
+var _ = os.Args
+
+func Get() int {
+	return reuse()
+}
+
+func Clear() int {
+	return 0
+}
+EOF
+curl -s -X POST "$URL/api/refresh" >/dev/null
+check "the step survives Get() moving down the file" contains "$(curl -s "$URL/api/analysis")" '"title":"Cache reuse"'
 
 echo "== 9. editing the explained code withholds the explanation =="
 cat > "$REPO/cache.go" <<'EOF'
@@ -147,6 +176,7 @@ func Clear() int {
 	return 0
 }
 EOF
+curl -s -X POST "$URL/api/refresh" >/dev/null
 AFTER="$(curl -s "$URL/api/analysis")"
 check "the stale step is withheld" test "$(python3 -c "
 import json,sys;print(len(json.loads(sys.argv[1])['steps']))" "$AFTER")" -eq 0

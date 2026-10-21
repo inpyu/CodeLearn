@@ -27,7 +27,7 @@ func newServer(t *testing.T) (*testrepo.Repo, *git.Repository, *httptest.Server)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := server.New(repo, "127.0.0.1", 0)
+	srv, err := server.New(repo, "127.0.0.1", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestAnalysisEndpoint(t *testing.T) {
 	_ = r
 }
 
-func TestRefreshReflectsNewEdits(t *testing.T) {
+func TestEditsAreOnlyPickedUpOnRefresh(t *testing.T) {
 	r, _, ts := newServer(t)
 
 	var before struct {
@@ -184,6 +184,16 @@ func TestRefreshReflectsNewEdits(t *testing.T) {
 	getJSON(t, ts, "/api/repository", &before)
 
 	r.Write("extra.go", "package cache\n")
+
+	// A read does not re-run git: the snapshot the viewer is showing stays
+	// coherent until the user asks for a new one.
+	var unchanged struct {
+		ChangedFiles int `json:"changed_files"`
+	}
+	getJSON(t, ts, "/api/repository", &unchanged)
+	if unchanged.ChangedFiles != before.ChangedFiles {
+		t.Fatalf("a read re-collected: %d -> %d", before.ChangedFiles, unchanged.ChangedFiles)
+	}
 
 	resp, err := ts.Client().Post(ts.URL+"/api/refresh", "application/json", strings.NewReader("{}"))
 	if err != nil {
@@ -199,6 +209,39 @@ func TestRefreshReflectsNewEdits(t *testing.T) {
 	}
 	if after.ChangedFiles != before.ChangedFiles+1 {
 		t.Fatalf("refresh did not see the new file: %d -> %d", before.ChangedFiles, after.ChangedFiles)
+	}
+
+	// And the refreshed snapshot is what later reads serve.
+	var settled struct {
+		ChangedFiles int `json:"changed_files"`
+	}
+	getJSON(t, ts, "/api/repository", &settled)
+	if settled.ChangedFiles != after.ChangedFiles {
+		t.Fatalf("refresh did not stick: %d", settled.ChangedFiles)
+	}
+}
+
+func TestOneScreenCostsOneCollection(t *testing.T) {
+	_, _, ts := newServer(t)
+
+	// Drawing a screen hits three endpoints; with a cached snapshot they must
+	// all report the same one rather than each re-running git.
+	var repository struct {
+		SnapshotID string `json:"snapshot_id"`
+	}
+	var changes struct {
+		SnapshotID string `json:"snapshot_id"`
+	}
+	var analysisView struct {
+		SnapshotID string `json:"snapshot_id"`
+	}
+	getJSON(t, ts, "/api/repository", &repository)
+	getJSON(t, ts, "/api/changes", &changes)
+	getJSON(t, ts, "/api/analysis", &analysisView)
+
+	if repository.SnapshotID != changes.SnapshotID || changes.SnapshotID != analysisView.SnapshotID {
+		t.Fatalf("endpoints disagree: %s / %s / %s",
+			repository.SnapshotID, changes.SnapshotID, analysisView.SnapshotID)
 	}
 }
 

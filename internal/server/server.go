@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/inpyu/codelearn/internal/git"
@@ -25,24 +26,36 @@ const DefaultPort = 8765
 const maxRequestBytes = 1 << 20
 
 // Server owns the listener and the HTTP handler for one repository.
+//
+// It holds the current snapshot so that drawing one screen - the file list,
+// a file's diff and the analysis - costs one collection rather than one per
+// request. The snapshot is rebuilt only on POST /api/refresh, which is also
+// what the Refresh button calls: CodeLearn deliberately does not watch the
+// filesystem, so the moment the user sees new data is the moment they ask.
 type Server struct {
-	repo *git.Repository
-	http *http.Server
-	ln   net.Listener
-	URL  string
+	repo     *git.Repository
+	http     *http.Server
+	ln       net.Listener
+	URL      string
+	mu       sync.RWMutex
+	snapshot *git.Snapshot
 }
 
 // New binds a listener and builds the handler. The port is chosen here rather
 // than inside Run so the caller can print a URL that is already correct.
-func New(repo *git.Repository, host string, port int) (*Server, error) {
+//
+// An initial snapshot may be supplied by the caller, which lets the CLI reuse
+// the collection it already made for its startup banner.
+func New(repo *git.Repository, host string, port int, initial *git.Snapshot) (*Server, error) {
 	ln, err := listen(host, port)
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{
-		repo: repo,
-		ln:   ln,
-		URL:  fmt.Sprintf("http://%s", ln.Addr().String()),
+		repo:     repo,
+		ln:       ln,
+		URL:      fmt.Sprintf("http://%s", ln.Addr().String()),
+		snapshot: initial,
 	}
 	s.http = &http.Server{
 		Handler:           s.routes(),

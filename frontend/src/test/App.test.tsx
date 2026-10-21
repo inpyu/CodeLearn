@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import App from '../App'
 import {
   analysis,
+  cacheDiff,
   cacheFile,
   emptyAnalysis,
   notesFile,
@@ -104,6 +105,32 @@ describe('viewer', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(selectedFileLabel()).toBeInTheDocument())
+  })
+
+  it('asks the server for a new snapshot only when Refresh is pressed', async () => {
+    let refreshes = 0
+    stubAPI({ onRefresh: () => (refreshes += 1) })
+    render(<App />)
+
+    await screen.findByText('Changed Files (2)')
+    // The initial load reuses the snapshot the CLI already built.
+    expect(refreshes).toBe(0)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(refreshes).toBe(1))
+  })
+
+  it('marks a file whose change exists only in the index', async () => {
+    stubAPI({
+      files: [{ ...cacheFile, index_only: true }],
+      diffs: { [cacheFile.path]: { ...cacheDiff, index_only: true } },
+    })
+    render(<App />)
+
+    expect(await screen.findByText('staged only')).toBeInTheDocument()
+    expect(
+      screen.getByText('staged only - comparing HEAD with the index'),
+    ).toBeInTheDocument()
   })
 
   it('reports an API error', async () => {

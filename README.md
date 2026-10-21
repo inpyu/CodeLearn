@@ -88,8 +88,18 @@ The server binds `127.0.0.1` and picks a free port when the default is taken.
 
 Staged and unstaged edits to the same file are merged into one entry, untracked
 files show up as new files with an empty Before, and binary files are listed
-but not compared. Press **Refresh** to re-read the working tree - CodeLearn
-does not watch the filesystem.
+but not compared.
+
+Press **Refresh** to re-read the working tree. Everything else is served from
+the snapshot the server already holds, so one screen costs one collection
+rather than one per request, and the three panes can never disagree about
+which state they are showing. CodeLearn does not watch the filesystem.
+
+**Staged-only changes.** The comparison is HEAD against the file you see on
+disk, which misses a change that was staged and then reverted in the working
+tree. Such a file is listed separately, marked `staged only`, and compared
+against the index instead - a staged change your working tree has since
+undone is exactly what you want to notice before committing.
 
 Selecting a file scopes the Learning Guide to that file. Prev/Next walks the
 units of the file and then carries on into the next file that has
@@ -112,6 +122,9 @@ file, it cuts the change along symbol boundaries instead:
 
 Outlines are produced by scanning, with no parser dependency, and are best
 effort: a file CodeLearn cannot outline falls back to hunks and still works.
+Multi-line signatures, generics, generic arrow functions and multi-line type
+aliases are handled; deeply unusual syntax may still fall back to a module
+level unit, which is harmless because a unit never points at the wrong code.
 
 A unit covers the whole symbol, not only the edited lines, so a one-line
 change is read in the context of the function it lives in. Code outside any
@@ -208,6 +221,10 @@ the code on both sides of the unit, so editing a unit invalidates its id. An
 id that survives is therefore proof the code behind it is unchanged, which is
 what lets the viewer tell a still-valid explanation from a stale one.
 
+Line numbers are deliberately not part of the id. Including them would make
+every id depend on all the code above it, so adding a single import would
+invalidate the explanation of every function below it in that file.
+
 Import is atomic: if any step fails validation, nothing is stored. On read,
 steps whose unit no longer exists are withheld rather than shown against the
 wrong lines, and the viewer reports how many were dropped. An edit elsewhere
@@ -216,6 +233,26 @@ in the repository moves the snapshot without invalidating anything.
 Analyses are stored under the OS user cache directory
 (`os.UserCacheDir()/codelearn/<repository-id>/<snapshot-id>/analysis.json`),
 never inside the repository, and written atomically via a temporary file.
+
+## Performance
+
+Measured on a repository of 1,000 single-function Go files, all modified,
+on a Linux x86-64 workstation:
+
+| Scenario | Time |
+| --- | --- |
+| `codelearn export` (one full collection) | 0.24 s |
+| Opening the viewer (file list + analysis) | 0.012 s |
+| Clicking a file (its diff) | 0.0003 s |
+| Pressing Refresh (full re-collection) | 0.24 s |
+
+Two things make this flat. All "before" blobs come from a single
+`git cat-file --batch` process rather than one `git show` per file, which
+turned 1,007 git invocations per collection into 9. And reads are served from
+the snapshot the server holds, so drawing a screen costs one collection rather
+than one per endpoint.
+
+These are measurements, not guarantees; `tests/e2e.sh` does not assert them.
 
 ## Security and privacy
 

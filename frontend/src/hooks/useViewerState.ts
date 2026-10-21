@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { fetchAnalysis, fetchChanges, fetchFileDiff, fetchRepository } from '../api'
+import {
+  fetchAnalysis,
+  fetchChanges,
+  fetchFileDiff,
+  fetchRepository,
+  requestRefresh,
+} from '../api'
 import type { Analysis, ChangedFile, FileDiff, RepositoryInfo } from '../types'
 
 const EMPTY_ANALYSIS: Analysis = {
@@ -49,14 +55,23 @@ export function useViewerState(): ViewerState {
   const diffRequest = useRef<AbortController | null>(null)
   const pendingChange = useRef<string | null>(null)
 
-  const refresh = useCallback(() => {
+  // recollect asks the server for a new snapshot first; the initial load
+  // reuses the one the CLI already built, so opening the viewer costs one
+  // collection rather than two.
+  const load = useCallback((recollect: boolean) => {
     setLoading(true)
     const controller = new AbortController()
-    Promise.all([
-      fetchRepository(controller.signal),
-      fetchChanges(controller.signal),
-      fetchAnalysis(controller.signal),
-    ])
+    const start = recollect
+      ? requestRefresh(controller.signal)
+      : Promise.resolve(null)
+    start
+      .then(() =>
+        Promise.all([
+          fetchRepository(controller.signal),
+          fetchChanges(controller.signal),
+          fetchAnalysis(controller.signal),
+        ]),
+      )
       .then(([repositoryInfo, changes, analysisView]) => {
         setRepository(repositoryInfo)
         setFiles(changes.files)
@@ -83,7 +98,9 @@ export function useViewerState(): ViewerState {
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(refresh, [refresh])
+  const refresh = useCallback(() => load(true), [load])
+
+  useEffect(() => load(false), [load])
 
   // Load the selected file's code, cancelling whatever was in flight.
   useEffect(() => {

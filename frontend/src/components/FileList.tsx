@@ -57,6 +57,14 @@ export default function FileList({ files, selectedPath, explainedFiles, onSelect
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-[13px] text-ink">{name}</span>
+                      {file.index_only && (
+                        <span
+                          className="shrink-0 rounded border border-edge px-1 text-[10px] text-amber-300"
+                          title="Staged, but the working tree matches HEAD. Before/After compares HEAD with the index."
+                        >
+                          staged only
+                        </span>
+                      )}
                       {explainedFiles.has(file.path) && (
                         <span
                           className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"

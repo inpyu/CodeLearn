@@ -30,3 +30,25 @@ export function fetchFileDiff(path: string, signal?: AbortSignal): Promise<FileD
 export function fetchAnalysis(signal?: AbortSignal): Promise<Analysis> {
   return get<Analysis>('/api/analysis', signal)
 }
+
+/**
+ * Asks the server to re-read git and build a new snapshot.
+ *
+ * Reads are served from the snapshot the server already holds, so this is the
+ * only thing that picks up edits made since the viewer was opened. CodeLearn
+ * deliberately does not watch the filesystem; Refresh is the moment the user
+ * asks for new data.
+ */
+export async function requestRefresh(
+  signal?: AbortSignal,
+): Promise<{ snapshot_id: string; changed_files: number }> {
+  const response = await fetch('/api/refresh', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`/api/refresh responded with ${response.status}`)
+  }
+  return (await response.json()) as { snapshot_id: string; changed_files: number }
+}

@@ -29,6 +29,8 @@ export interface ChangedFile {
   old_path?: string
   status: FileStatus
   binary: boolean
+  /** The change exists only in the index; the working tree matches HEAD. */
+  index_only: boolean
   additions: number
   deletions: number
   change_ids: string[]
@@ -51,6 +53,8 @@ export interface FileDiff {
   snapshot_id: string
   path: string
   binary: boolean
+  /** Before/After compare HEAD with the index rather than the working tree. */
+  index_only: boolean
   too_large: boolean
   before: string
   after: string

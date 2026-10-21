@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -144,8 +145,14 @@ func (r *Repository) BaseRev(ctx context.Context) string {
 // not on disk at all, so it has to come from the object store. A missing path
 // reports ok=false rather than an error, which is what lets an added file flow
 // through the same code path as a modified one.
+// An empty rev lets the caller pass a complete object name, such as ":path"
+// for stage 0 of the index.
 func (r *Repository) ReadAtRev(ctx context.Context, rev, path string) ([]byte, bool) {
-	out, err := r.RunBytes(ctx, "show", rev+":"+path)
+	object := path
+	if rev != "" {
+		object = rev + ":" + path
+	}
+	out, err := r.RunBytes(ctx, "show", object)
 	if err != nil {
 		return nil, false
 	}
@@ -193,4 +200,82 @@ func (r *Repository) ReadWorktree(path string) ([]byte, bool) {
 		return nil, false
 	}
 	return data, true
+}
+
+// ReadManyAtRev reads many blobs from one revision in a single git process.
+//
+// Reading the "before" side one `git show` at a time costs one subprocess per
+// changed file, which dominates collection on a large change: a thousand
+// modified files meant a thousand process spawns. `cat-file --batch` streams
+// them all through one process instead.
+func (r *Repository) ReadManyAtRev(ctx context.Context, rev string, paths []string) map[string][]byte {
+	result := make(map[string][]byte, len(paths))
+	var batched []string
+	for _, path := range paths {
+		// A path containing a newline cannot be expressed in the batch
+		// protocol's line-delimited input, so it falls back to one call.
+		if strings.ContainsAny(path, "\n\r") {
+			if data, ok := r.ReadAtRev(ctx, rev, path); ok {
+				result[path] = data
+			}
+			continue
+		}
+		batched = append(batched, path)
+	}
+	if len(batched) == 0 {
+		return result
+	}
+
+	var input bytes.Buffer
+	for _, path := range batched {
+		input.WriteString(rev + ":" + path + "\n")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git",
+		"-C", r.Root, "-c", "core.quotepath=false", "cat-file", "--batch")
+	cmd.Stdin = &input
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		// Fall back to one call per path rather than losing the before side.
+		for _, path := range batched {
+			if data, ok := r.ReadAtRev(ctx, rev, path); ok {
+				result[path] = data
+			}
+		}
+		return result
+	}
+
+	parseBatch(stdout.Bytes(), batched, result)
+	return result
+}
+
+// parseBatch walks the `cat-file --batch` response, which is a header line of
+// "<sha> <type> <size>" followed by that many bytes and a newline, or
+// "<object> missing" for anything that does not exist.
+func parseBatch(out []byte, paths []string, into map[string][]byte) {
+	offset := 0
+	for _, path := range paths {
+		newline := bytes.IndexByte(out[offset:], '\n')
+		if newline < 0 {
+			return
+		}
+		header := string(out[offset : offset+newline])
+		offset += newline + 1
+
+		fields := strings.Fields(header)
+		if len(fields) < 3 {
+			continue // "<object> missing": nothing to read, nothing to skip
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || offset+size > len(out) {
+			return
+		}
+		content := make([]byte, size)
+		copy(content, out[offset:offset+size])
+		into[path] = content
+		offset += size + 1 // the trailing newline git appends
+	}
 }

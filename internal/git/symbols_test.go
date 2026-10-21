@@ -133,3 +133,76 @@ func TestLabelFormatsCallablesWithParentheses(t *testing.T) {
 		t.Fatalf("labels = %v", labels)
 	}
 }
+
+func TestPythonMultiLineSignatureKeepsItsBody(t *testing.T) {
+	source := "def wide(\n    a,\n    b,\n):\n    return a\n\n\ndef after():\n    return 2\n"
+
+	symbols := git.Outline("m.py", source)
+	if len(symbols) != 2 {
+		t.Fatalf("symbols = %v", outlineNames("m.py", source))
+	}
+	// The closing "):" is indented no further than the def, so a naive
+	// indentation scan would end the block there and drop the body.
+	if symbols[0].Start != 1 || symbols[0].End != 5 {
+		t.Fatalf("wide = %d-%d, want 1-5", symbols[0].Start, symbols[0].End)
+	}
+}
+
+func TestPythonMethodWithAMultiLineSignature(t *testing.T) {
+	source := "class C:\n    def m(\n        self,\n        a,\n    ):\n        return a\n"
+
+	symbols := git.Outline("m.py", source)
+	if len(symbols) != 2 || symbols[1].Name != "C.m" {
+		t.Fatalf("symbols = %v", outlineNames("m.py", source))
+	}
+	if symbols[1].Start != 2 || symbols[1].End != 6 {
+		t.Fatalf("C.m = %d-%d, want 2-6", symbols[1].Start, symbols[1].End)
+	}
+}
+
+func TestGenericArrowFunctionIsFound(t *testing.T) {
+	source := "export const useThing = <T,>(\n  initial: T,\n  { eager = false }: { eager?: boolean } = {},\n) => {\n  return initial\n}\n"
+
+	symbols := git.Outline("x.ts", source)
+	if len(symbols) != 1 || symbols[0].Name != "useThing" {
+		t.Fatalf("symbols = %v", outlineNames("x.ts", source))
+	}
+	if symbols[0].Start != 1 || symbols[0].End != 6 {
+		t.Fatalf("useThing = %d-%d, want 1-6", symbols[0].Start, symbols[0].End)
+	}
+}
+
+func TestMultiLineTypeAliasIsNotClipped(t *testing.T) {
+	source := "export type Status =\n  | 'a'\n  | 'b'\n\nexport function After() {\n  return 1\n}\n"
+
+	symbols := git.Outline("x.ts", source)
+	if len(symbols) != 2 {
+		t.Fatalf("symbols = %v", outlineNames("x.ts", source))
+	}
+	if symbols[0].Start != 1 || symbols[0].End != 3 {
+		t.Fatalf("Status = %d-%d, want 1-3", symbols[0].Start, symbols[0].End)
+	}
+}
+
+func TestGoMultiLineSignatureAndGenerics(t *testing.T) {
+	source := "package m\n\nfunc Collect(\n\tctx context.Context,\n\trepo *Repository,\n) (*Snapshot, error) {\n\treturn nil, nil\n}\n\nfunc Map[T any, U any](in []T) []U {\n\treturn nil\n}\n"
+
+	symbols := git.Outline("x.go", source)
+	if len(symbols) != 2 {
+		t.Fatalf("symbols = %v", outlineNames("x.go", source))
+	}
+	if symbols[0].Start != 3 || symbols[0].End != 8 {
+		t.Fatalf("Collect = %d-%d, want 3-8", symbols[0].Start, symbols[0].End)
+	}
+	if symbols[1].Name != "Map" {
+		t.Fatalf("second symbol = %q", symbols[1].Name)
+	}
+}
+
+func TestBlockCommentBracesDoNotConfuseTheScanner(t *testing.T) {
+	source := "/* a { brace */\nexport function First() {\n  return 1\n}\n\nexport function Second() {\n  return 2\n}\n"
+
+	if got := outlineNames("x.js", source); !equal(got, []string{"function:First", "function:Second"}) {
+		t.Fatalf("got %v", got)
+	}
+}

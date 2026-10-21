@@ -43,6 +43,11 @@ export default function DiffViewer({
         {file.old_path && (
           <span className="font-mono text-[11px] text-muted">renamed from {file.old_path}</span>
         )}
+        {diff.index_only && (
+          <span className="font-mono text-[11px] text-amber-300">
+            staged only - comparing HEAD with the index
+          </span>
+        )}
         <span className="ml-auto flex max-h-16 flex-wrap items-center gap-1.5 overflow-y-auto">
           {diff.changes.map((unit: ChangeUnit) => (
             <button

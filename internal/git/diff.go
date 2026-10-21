@@ -61,10 +61,16 @@ type Change struct {
 
 // FileChange is a changed file together with its change units.
 type FileChange struct {
-	Path      string   `json:"path"`
-	OldPath   string   `json:"old_path,omitempty"`
-	Status    string   `json:"status"`
-	Binary    bool     `json:"binary"`
+	Path    string `json:"path"`
+	OldPath string `json:"old_path,omitempty"`
+	Status  string `json:"status"`
+	Binary  bool   `json:"binary"`
+	// IndexOnly marks a file whose change exists only in the index: the
+	// working tree matches HEAD, so comparing HEAD with the working tree
+	// would show nothing. Such a file is compared against the index instead,
+	// and the viewer labels it, because a staged change the working tree has
+	// since reverted is exactly what a reader needs to know before committing.
+	IndexOnly bool     `json:"index_only,omitempty"`
 	Additions int      `json:"additions"`
 	Deletions int      `json:"deletions"`
 	Before    string   `json:"-"`

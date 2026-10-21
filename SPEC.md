@@ -226,6 +226,12 @@ sees. Changes that exist only in the index must still be reflected. In
 particular, a file staged and then deleted from the working tree must not be
 judged by working tree existence alone.
 
+A file whose change exists *only* in the index - staged, then reverted on
+disk - produces no HEAD-to-working-tree difference at all. It is therefore
+detected from porcelain status, flagged `index_only`, and compared against the
+index rather than the working tree, so the staged change is visible without
+breaking the "one final state" model for every other file.
+
 ## 5.3 Git Commands
 
 ```bash
@@ -318,10 +324,14 @@ A change id is the SHA-256 of a normalised serialisation of:
 - Base commit
 - File path
 - Symbol name (empty for module level and hunk units)
-- Old range
-- New range
 - Before code
 - After code
+- An occurrence index, non-zero only for units that are otherwise identical
+
+Line ranges are deliberately excluded. Including them would tie every id to
+all the code above it in its file, so inserting one import would invalidate
+the explanations of every unit below it even though none of that code
+changed.
 
 The same snapshot always produces the same change id. Changing the code or its
 location changes the id. That is intended in the MVP: an id that survives is
@@ -460,7 +470,10 @@ With no valid analysis, `steps` is an empty array.
 
 ## 8.5 POST /api/refresh
 
-Re-reads git state and builds a new snapshot.
+Re-reads git state and builds a new snapshot. Read endpoints serve the
+snapshot the server currently holds, so this is the only thing that picks up
+edits: one screen costs one collection, and the panes cannot disagree about
+which state they show.
 
 ```json
 { "snapshot_id": "sha256:new-snapshot", "changed_files": 4 }

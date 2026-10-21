@@ -7,22 +7,37 @@ import (
 	"sort"
 )
 
-// changeID is the SHA-256 of a normalised serialisation of everything that
-// identifies a unit. An id that survives a re-collection is therefore proof
-// that the code behind it is byte-identical, which is what lets import decide
-// whether a stored explanation still belongs to the current code.
-func changeID(baseCommit, path, symbol string, old, new Range, before, after string) string {
+// changeID is the SHA-256 of a normalised serialisation of what identifies a
+// unit: where it lives, what it is called, and the code on both sides.
+//
+// Line numbers are deliberately not part of it. They would make an id depend
+// on everything above the unit in its file, so adding one import would
+// invalidate every explanation below it even though none of that code
+// changed. Leaving them out means an id survives exactly as long as its own
+// code does, which is the property import relies on.
+//
+// occurrence disambiguates units that are otherwise identical - two module
+// level blocks with the same content in one file - and is only ever non-zero
+// for those, so it cannot reintroduce the positional dependency.
+func changeID(baseCommit, path, symbol, before, after string, occurrence int) string {
 	digest := sha256.New()
 	for _, part := range []string{
-		baseCommit, path, symbol,
-		fmt.Sprintf("%d,%d", old.Start, old.Count),
-		fmt.Sprintf("%d,%d", new.Start, new.Count),
-		before, after,
+		baseCommit, path, symbol, before, after, fmt.Sprintf("%d", occurrence),
 	} {
 		digest.Write([]byte(part))
 		digest.Write([]byte{0})
 	}
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+// occurrenceCounter hands out the index of each repeated unit identity.
+type occurrenceCounter map[string]int
+
+func (c occurrenceCounter) next(symbol, before, after string) int {
+	key := symbol + "\x00" + before + "\x00" + after
+	index := c[key]
+	c[key] = index + 1
+	return index
 }
 
 // buildChanges cuts a file's changes into units: by symbol where the language
@@ -40,13 +55,14 @@ func buildChanges(file *FileChange, hunks []hunk, baseCommit string) []Change {
 func hunkChanges(file *FileChange, hunks []hunk, baseCommit string) []Change {
 	beforeLines := splitLines(file.Before)
 	afterLines := splitLines(file.After)
+	occurrences := occurrenceCounter{}
 	changes := make([]Change, 0, len(hunks))
 	for _, h := range hunks {
 		h = trimContext(h, beforeLines, afterLines)
 		before := sliceLines(file.Before, h.old)
 		after := sliceLines(file.After, h.new)
 		changes = append(changes, Change{
-			ID:       changeID(baseCommit, file.Path, "", h.old, h.new, before, after),
+			ID:       changeID(baseCommit, file.Path, "", before, after, occurrences.next("", before, after)),
 			File:     file.Path,
 			Symbol:   nil,
 			Kind:     KindBlock,
@@ -141,6 +157,7 @@ func symbolChanges(file *FileChange, hunks []hunk, beforeSymbols, afterSymbols [
 
 	sort.SliceStable(pending, func(i, j int) bool { return pending[i].order < pending[j].order })
 
+	occurrences := occurrenceCounter{}
 	changes := make([]Change, 0, len(pending))
 	for _, unit := range pending {
 		var symbol *string
@@ -151,7 +168,8 @@ func symbolChanges(file *FileChange, hunks []hunk, beforeSymbols, afterSymbols [
 			label = Symbol{Name: name, Kind: unit.kind}.Label()
 		}
 		changes = append(changes, Change{
-			ID:       changeID(baseCommit, file.Path, unit.symbol, unit.old, unit.new, unit.before, unit.after),
+			ID: changeID(baseCommit, file.Path, unit.symbol, unit.before, unit.after,
+				occurrences.next(unit.symbol, unit.before, unit.after)),
 			File:     file.Path,
 			Symbol:   symbol,
 			Kind:     unit.kind,

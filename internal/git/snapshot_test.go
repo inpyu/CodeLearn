@@ -301,3 +301,113 @@ func TestResolveInsideRefusesEscapes(t *testing.T) {
 		t.Fatalf("a.txt was rejected: %v", err)
 	}
 }
+
+func TestStagedThenRevertedInTheWorkingTree(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("b.txt", "original\n")
+	r.Commit("init")
+	r.Write("b.txt", "staged\n")
+	r.Git("add", "b.txt")
+	r.Write("b.txt", "original\n")
+
+	// The working tree matches HEAD, so "git diff HEAD" reports nothing, but
+	// the change still exists in the index and must be visible.
+	file := fileOf(t, collect(t, r), "b.txt")
+	if !file.IndexOnly {
+		t.Fatalf("expected an index-only entry, got %+v", file)
+	}
+	if file.Status != git.StatusModified {
+		t.Fatalf("status = %q", file.Status)
+	}
+	if len(file.Changes) != 1 || file.Changes[0].After != "staged" {
+		t.Fatalf("units = %+v", file.Changes)
+	}
+}
+
+func TestStagedAndThenEditedAgainIsNotReportedTwice(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("b.txt", "original\n")
+	r.Commit("init")
+	r.Write("b.txt", "staged\n")
+	r.Git("add", "b.txt")
+	r.Write("b.txt", "unstaged\n")
+
+	snapshot := collect(t, r)
+	if len(snapshot.Files) != 1 {
+		t.Fatalf("expected one entry, got %d", len(snapshot.Files))
+	}
+	file := fileOf(t, snapshot, "b.txt")
+	if file.IndexOnly {
+		t.Fatal("a file with a working tree difference must not be index-only")
+	}
+	if file.After != "unstaged\n" {
+		t.Fatalf("after = %q", file.After)
+	}
+}
+
+func TestStagedAdditionRevertedOnDiskIsStillVisible(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("keep.txt", "1\n")
+	r.Commit("init")
+	r.Write("new.txt", "fresh\n")
+	r.Git("add", "new.txt")
+	r.Remove("new.txt")
+
+	file := fileOf(t, collect(t, r), "new.txt")
+	if !file.IndexOnly || file.Status != git.StatusAdded {
+		t.Fatalf("file = %+v", file)
+	}
+	if file.Changes[0].After != "fresh" {
+		t.Fatalf("units = %+v", file.Changes)
+	}
+}
+
+func TestACleanRepositoryStillHasNoIndexOnlyEntries(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("a.txt", "one\n")
+	r.Commit("init")
+
+	if snapshot := collect(t, r); len(snapshot.Files) != 0 {
+		t.Fatalf("expected no changes, got %+v", snapshot.Files)
+	}
+}
+
+func TestChangeIDSurvivesCodeMovingWithinItsFile(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("mod.go", "package m\n\nfunc A() int {\n\treturn 1\n}\n")
+	r.Commit("init")
+	r.Write("mod.go", "package m\n\nfunc A() int {\n\treturn 99\n}\n")
+	before := collect(t, r).Changes()[0].ID
+
+	// An unrelated insertion above A() shifts its line numbers but leaves its
+	// code byte-identical, so its explanation must stay valid.
+	r.Write("mod.go", "package m\n\nimport \"os\"\n\nvar _ = os.Args\n\nfunc A() int {\n\treturn 99\n}\n")
+
+	var found bool
+	for _, change := range collect(t, r).Changes() {
+		if change.Symbol != nil && *change.Symbol == "A" {
+			found = true
+			if change.ID != before {
+				t.Fatalf("id changed although A() did not: %s -> %s", before, change.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("A() is no longer a unit")
+	}
+}
+
+func TestIdenticalUnitsInOneFileGetDistinctIDs(t *testing.T) {
+	r := testrepo.New(t)
+	r.Write("notes.txt", "x\n\n\n\n\n\n\n\n\n\nsame\n\n\n\n\n\n\n\n\n\nsame\n")
+	r.Commit("init")
+	r.Write("notes.txt", "x\n\n\n\n\n\n\n\n\n\nedited\n\n\n\n\n\n\n\n\n\nedited\n")
+
+	changes := fileOf(t, collect(t, r), "notes.txt").Changes
+	if len(changes) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(changes))
+	}
+	if changes[0].ID == changes[1].ID {
+		t.Fatalf("two units share an id: %s", changes[0].ID)
+	}
+}

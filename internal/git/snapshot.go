@@ -82,7 +82,16 @@ func Collect(ctx context.Context, repo *Repository) (*Snapshot, error) {
 		return nil, err
 	}
 
-	files := append(tracked, untracked...)
+	seen := map[string]bool{}
+	for _, file := range append(append([]FileChange{}, tracked...), untracked...) {
+		seen[file.Path] = true
+	}
+	staged, err := indexOnlyChanges(ctx, repo, baseRev, baseID, seen)
+	if err != nil {
+		return nil, err
+	}
+
+	files := append(append(tracked, untracked...), staged...)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
 	return &Snapshot{
@@ -117,9 +126,25 @@ func trackedChanges(ctx context.Context, repo *Repository, baseRev, baseID strin
 
 	hunksByFile := parsePatch(patch)
 	stats := parseNumstat(numstat)
+	entries := parseNameStatus(nameStatus)
+
+	// Every "before" blob is fetched through one git process rather than one
+	// per file, which is what keeps collection flat as the change grows.
+	var sources []string
+	for _, entry := range entries {
+		if entry.status == StatusAdded {
+			continue
+		}
+		source := entry.path
+		if entry.oldPath != "" {
+			source = entry.oldPath
+		}
+		sources = append(sources, source)
+	}
+	blobs := repo.ReadManyAtRev(ctx, baseRev, sources)
 
 	var files []FileChange
-	for _, entry := range parseNameStatus(nameStatus) {
+	for _, entry := range entries {
 		source := entry.path
 		if entry.oldPath != "" {
 			source = entry.oldPath
@@ -128,7 +153,7 @@ func trackedChanges(ctx context.Context, repo *Repository, baseRev, baseID strin
 		var before, after string
 		var beforeBinary, afterBinary bool
 		if entry.status != StatusAdded {
-			data, ok := repo.ReadAtRev(ctx, baseRev, source)
+			data, ok := blobs[source]
 			before, beforeBinary = decodeText(data, ok)
 		}
 		if entry.status != StatusDeleted {
@@ -268,7 +293,7 @@ func snapshotID(baseID string, files []FileChange) string {
 	digest.Write([]byte(baseID))
 	for _, file := range ordered {
 		digest.Write([]byte{0})
-		fmt.Fprintf(digest, "%s\x00%s\x00%s\x00", file.Path, file.Status, file.OldPath)
+		fmt.Fprintf(digest, "%s\x00%s\x00%s\x00%t\x00", file.Path, file.Status, file.OldPath, file.IndexOnly)
 		beforeSum := sha256.Sum256([]byte(file.Before))
 		afterSum := sha256.Sum256([]byte(file.After))
 		digest.Write(beforeSum[:])

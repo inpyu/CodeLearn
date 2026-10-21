@@ -111,9 +111,14 @@ func pythonHeader(line string) (indent int, name, kind string, ok bool) {
 	return 0, "", "", false
 }
 
-// pythonBlockEnd is the last line of the block opened at index, found by
-// scanning for the next non-blank line indented no further than the header.
+// pythonBlockEnd is the last line of the block opened at index.
+//
+// The scan starts after the signature rather than after the header line: a
+// def whose parameters span several lines ends its signature on a line
+// indented no further than the def itself ("):"), and treating that as the
+// end of the block would leave the body outside the unit.
 func pythonBlockEnd(lines []string, index, indent int) int {
+	index = pythonSignatureEnd(lines, index)
 	end := index + 1
 	for next := index + 1; next < len(lines); next++ {
 		line := lines[next]
@@ -126,6 +131,28 @@ func pythonBlockEnd(lines []string, index, indent int) int {
 		end = next + 1
 	}
 	return end
+}
+
+// pythonSignatureEnd is the index of the line closing the parameter list.
+func pythonSignatureEnd(lines []string, index int) int {
+	depth := 0
+	for at := index; at < len(lines); at++ {
+		for _, char := range lines[at] {
+			switch char {
+			case '(', '[', '{':
+				depth++
+			case ')', ']', '}':
+				depth--
+			case '#':
+				goto nextLine
+			}
+		}
+	nextLine:
+		if depth <= 0 {
+			return at
+		}
+	}
+	return index
 }
 
 func pythonMethods(lines []string, first, last int, owner string) []Symbol {
@@ -179,7 +206,7 @@ var goPatterns = []pattern{
 
 var jsPatterns = []pattern{
 	{regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)`), KindFunction},
-	{regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+?)?=\s*(?:async\s+)?(?:function\b|\(|[A-Za-z_$][\w$]*\s*=>)`), KindFunction},
+	{regexp.MustCompile(`^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+?)?=\s*(?:async\s+)?(?:function\b|<[^=]*>\s*\(|\(|[A-Za-z_$][\w$]*\s*=>)`), KindFunction},
 	{regexp.MustCompile(`^(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)`), KindClass},
 	{regexp.MustCompile(`^(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)`), KindType},
 }
@@ -272,6 +299,7 @@ func clean(line string) string {
 func blockEnd(lines []string, startIndex int) int {
 	depth, paren := 0, 0
 	opened := false
+	lastContinued := startIndex
 	for index := startIndex; index < len(lines); index++ {
 		text := clean(lines[index])
 		for _, char := range text {
@@ -299,11 +327,37 @@ func blockEnd(lines []string, startIndex int) int {
 		if !opened && paren == 0 && strings.HasSuffix(strings.TrimRight(text, " \t"), ";") {
 			return index
 		}
-		if !opened && paren == 0 && index > startIndex+2 {
-			return startIndex
+		if !opened && paren == 0 && index > startIndex {
+			// A declaration with no body - a type alias, say - continues for
+			// as long as its lines are indented or open with a continuation
+			// token, so a union spread over several lines stays one symbol
+			// instead of being clipped to its first line.
+			if !isContinuation(lines[index]) {
+				return lastContinued
+			}
+			lastContinued = index
 		}
 	}
+	if !opened {
+		return lastContinued
+	}
 	return len(lines) - 1
+}
+
+// isContinuation reports whether a line carries on the declaration above it.
+func isContinuation(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if leadingSpaces(line) > 0 {
+		return true
+	}
+	switch trimmed[0] {
+	case '|', '&', ',', '.', '?', ':', '+':
+		return true
+	}
+	return false
 }
 
 func classMethods(lines []string, first, last int, owner string) []Symbol {

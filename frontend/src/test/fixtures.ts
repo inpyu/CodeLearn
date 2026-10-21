@@ -17,6 +17,7 @@ export const cacheFile: ChangedFile = {
   path: 'internal/cache.go',
   status: 'modified',
   binary: false,
+  index_only: false,
   additions: 3,
   deletions: 1,
   change_ids: ['sha256:' + '1'.repeat(64), 'sha256:' + '2'.repeat(64)],
@@ -26,6 +27,7 @@ export const notesFile: ChangedFile = {
   path: 'notes.txt',
   status: 'untracked',
   binary: false,
+  index_only: false,
   additions: 2,
   deletions: 0,
   change_ids: ['sha256:' + '3'.repeat(64)],
@@ -35,6 +37,7 @@ export const cacheDiff: FileDiff = {
   snapshot_id: repository.snapshot_id,
   path: cacheFile.path,
   binary: false,
+  index_only: false,
   too_large: false,
   before: 'package cache\n\nfunc Get() int {\n\treturn create()\n}\n',
   after: 'package cache\n\nfunc Get() int {\n\treturn reuse()\n}\n',
@@ -62,6 +65,7 @@ export const notesDiff: FileDiff = {
   snapshot_id: repository.snapshot_id,
   path: notesFile.path,
   binary: false,
+  index_only: false,
   too_large: false,
   before: '',
   after: 'alpha\nbravo\n',
@@ -115,6 +119,7 @@ export function stubAPI(overrides: {
   analysis?: Analysis
   diffs?: Record<string, FileDiff>
   onDiff?: (path: string) => void
+  onRefresh?: () => void
 } = {}) {
   const files = overrides.files ?? [cacheFile, notesFile]
   const diffs = overrides.diffs ?? {
@@ -131,6 +136,10 @@ export function stubAPI(overrides: {
         headers: { 'Content-Type': 'application/json' },
       })
 
+    if (url.startsWith('/api/refresh')) {
+      overrides.onRefresh?.()
+      return json({ snapshot_id: repository.snapshot_id, changed_files: files.length })
+    }
     if (url.startsWith('/api/repository')) {
       return json({ ...repository, changed_files: files.length })
     }

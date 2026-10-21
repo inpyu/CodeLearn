@@ -128,7 +128,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return ExitGitError
 	}
 
-	srv, err := server.New(repo, *host, *port)
+	srv, err := server.New(repo, *host, *port, snapshot)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return ExitGitError

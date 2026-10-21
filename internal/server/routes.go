@@ -32,6 +32,7 @@ type changedFile struct {
 	OldPath   string   `json:"old_path,omitempty"`
 	Status    string   `json:"status"`
 	Binary    bool     `json:"binary"`
+	IndexOnly bool     `json:"index_only"`
 	Additions int      `json:"additions"`
 	Deletions int      `json:"deletions"`
 	ChangeIDs []string `json:"change_ids"`
@@ -55,6 +56,7 @@ type diffResponse struct {
 	SnapshotID string       `json:"snapshot_id"`
 	Path       string       `json:"path"`
 	Binary     bool         `json:"binary"`
+	IndexOnly  bool         `json:"index_only"`
 	TooLarge   bool         `json:"too_large"`
 	Before     string       `json:"before"`
 	After      string       `json:"after"`
@@ -122,19 +124,32 @@ func limitBody(next http.Handler) http.Handler {
 	})
 }
 
-// snapshot re-reads git on every request. That is why Refresh needs no cache
-// invalidation and no file watcher: the server holds no state to go stale.
-func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) (*git.Snapshot, bool) {
+// currentSnapshot returns the cached snapshot, collecting one the first time.
+func (s *Server) currentSnapshot(w http.ResponseWriter, r *http.Request) (*git.Snapshot, bool) {
+	s.mu.RLock()
+	cached := s.snapshot
+	s.mu.RUnlock()
+	if cached != nil {
+		return cached, true
+	}
+	return s.rebuild(w, r)
+}
+
+// rebuild collects a fresh snapshot and replaces the cached one.
+func (s *Server) rebuild(w http.ResponseWriter, r *http.Request) (*git.Snapshot, bool) {
 	snapshot, err := git.Collect(r.Context(), s.repo)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
+	s.mu.Lock()
+	s.snapshot = snapshot
+	s.mu.Unlock()
 	return snapshot, true
 }
 
 func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
-	snapshot, ok := s.snapshot(w, r)
+	snapshot, ok := s.currentSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -151,7 +166,7 @@ func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
-	snapshot, ok := s.snapshot(w, r)
+	snapshot, ok := s.currentSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -162,6 +177,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 			OldPath:   file.OldPath,
 			Status:    file.Status,
 			Binary:    file.Binary,
+			IndexOnly: file.IndexOnly,
 			Additions: file.Additions,
 			Deletions: file.Deletions,
 			ChangeIDs: file.ChangeIDs(),
@@ -176,7 +192,7 @@ func (s *Server) handleFileDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required")
 		return
 	}
-	snapshot, ok := s.snapshot(w, r)
+	snapshot, ok := s.currentSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -192,6 +208,7 @@ func (s *Server) handleFileDiff(w http.ResponseWriter, r *http.Request) {
 		SnapshotID: snapshot.ID,
 		Path:       file.Path,
 		Binary:     file.Binary,
+		IndexOnly:  file.IndexOnly,
 		Changes:    make([]diffChange, 0, len(file.Changes)),
 	}
 	for _, change := range file.Changes {
@@ -214,7 +231,7 @@ func (s *Server) handleFileDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
-	snapshot, ok := s.snapshot(w, r)
+	snapshot, ok := s.currentSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -222,7 +239,7 @@ func (s *Server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	snapshot, ok := s.snapshot(w, r)
+	snapshot, ok := s.rebuild(w, r)
 	if !ok {
 		return
 	}
