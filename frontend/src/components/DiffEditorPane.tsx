@@ -10,6 +10,7 @@ import type { ChangeUnit, FileDiff } from '../types'
 interface Props {
   diff: FileDiff
   selected: ChangeUnit | null
+  onSelectChange: (changeId: string) => void
 }
 
 // Monaco is bundled locally rather than fetched from a CDN, so the viewer
@@ -23,8 +24,24 @@ loader.config({ monaco })
  * Monaco is by far the largest chunk, and the file list is useful before it
  * has arrived.
  */
-export default function DiffEditorPane({ diff, selected }: Props) {
+/** The unit whose new-side range contains a line, if any. */
+function unitAtLine(diff: FileDiff, line: number): ChangeUnit | undefined {
+  return diff.changes.find(
+    (change) =>
+      change.new_range.count > 0 &&
+      line >= change.new_range.start &&
+      line < change.new_range.start + change.new_range.count,
+  )
+}
+
+export default function DiffEditorPane({ diff, selected, onSelectChange }: Props) {
   const editorRef = useRef<editor.IStandaloneDiffEditor | null>(null)
+  // The cursor handler is registered once, so it reads the current props
+  // through refs rather than closing over the values it was mounted with.
+  const diffRef = useRef(diff)
+  const selectedRef = useRef(selected)
+  diffRef.current = diff
+  selectedRef.current = selected
   const originalDecorations = useRef<editor.IEditorDecorationsCollection | null>(null)
   const modifiedDecorations = useRef<editor.IEditorDecorationsCollection | null>(null)
 
@@ -92,6 +109,14 @@ export default function DiffEditorPane({ diff, selected }: Props) {
         editorRef.current = instance
         originalDecorations.current = instance.getOriginalEditor().createDecorationsCollection([])
         modifiedDecorations.current = instance.getModifiedEditor().createDecorationsCollection([])
+        // Clicking code selects the unit it belongs to, so the reader can
+        // navigate from the code as well as from the guide.
+        instance.getModifiedEditor().onDidChangeCursorPosition((event) => {
+          const unit = unitAtLine(diffRef.current, event.position.lineNumber)
+          if (unit && unit.id !== selectedRef.current?.id) {
+            onSelectChange(unit.id)
+          }
+        })
       }}
       options={{
         renderSideBySide: true,

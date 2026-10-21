@@ -1,12 +1,21 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-shell: #0b0f17;
-  --color-panel: #121722;
-  --color-edge: #222a38;
-  --color-ink: #e6eaf2;
-  --color-muted: #8c97ab;
-  --color-accent: #4f9dff;
+  /* Surfaces, from deepest to most raised. */
+  --color-shell: #0b0e14;
+  --color-panel: #111621;
+  --color-raised: #182031;
+  --color-edge: #222c3f;
+  --color-edge-soft: #1a2230;
+
+  /* Text, from primary to faintest. */
+  --color-ink: #e8ecf4;
+  --color-ink-dim: #a8b3c7;
+  --color-muted: #6f7d94;
+
+  --color-accent: #5aa2ff;
+  --color-add: #4ade80;
+  --color-del: #fb7185;
 }
 
 html,
@@ -20,12 +29,33 @@ body {
   background: var(--color-shell);
   color: var(--color-ink);
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  font-size: 14px;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A quieter scrollbar, so a scrolling list does not draw the eye. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Highlight applied by the diff viewer to the selected change unit. */
 .codelearn-unit {
-  background: rgba(79, 157, 255, 0.16);
+  background: rgba(90, 162, 255, 0.13);
 }
 
 .codelearn-unit-margin {

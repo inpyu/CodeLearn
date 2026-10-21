@@ -8,11 +8,9 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/arm64 windows/amd64
 # The default target produces a single binary with the viewer embedded.
 all: build
 
-# Vite empties web/dist, which would delete the committed placeholder that
-# keeps the directory buildable from a fresh clone, so it is restored here.
+# The Vite build restores web/dist/.gitkeep itself, so this needs no wrapper.
 frontend:
 	cd frontend && npm ci && npm run build
-	git checkout -- web/dist/.gitkeep 2>/dev/null || true
 
 build: frontend
 	$(GO) build -o $(BINARY) ./cmd/codelearn

@@ -3,14 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import App from '../App'
-import {
-  analysis,
-  cacheDiff,
-  cacheFile,
-  emptyAnalysis,
-  notesFile,
-  stubAPI,
-} from './fixtures'
+import { analysis, cacheDiff, cacheFile, emptyAnalysis, notesFile, stubAPI } from './fixtures'
 
 // The Monaco pane is lazily loaded and does not run in jsdom; the tests cover
 // everything around it. Monaco's own rendering is checked in the browser.
@@ -20,14 +13,19 @@ vi.mock('../components/DiffEditorPane', () => ({
   ),
 }))
 
+const file = (name: RegExp) => screen.getByRole('button', { name })
+
 describe('viewer', () => {
-  it('renders the changed file list', async () => {
+  it('renders the changed file list with totals', async () => {
     stubAPI()
     render(<App />)
 
-    expect(await screen.findByText('Changed Files (2)')).toBeInTheDocument()
+    expect(await screen.findByText('Changed Files')).toBeInTheDocument()
     expect(screen.getByText('cache.go')).toBeInTheDocument()
     expect(screen.getByText('notes.txt')).toBeInTheDocument()
+    // Header stats fill the band that would otherwise be empty.
+    expect(screen.getByText('2 files')).toBeInTheDocument()
+    expect(screen.getByText('1 explained')).toBeInTheDocument()
   })
 
   it('requests the diff of the selected file only', async () => {
@@ -35,25 +33,36 @@ describe('viewer', () => {
     stubAPI({ onDiff: (path) => requested.push(path) })
     render(<App />)
 
-    await screen.findByText('Changed Files (2)')
+    await screen.findByText('Changed Files')
     await waitFor(() => expect(requested).toContain(cacheFile.path))
     expect(requested).not.toContain(notesFile.path)
 
-    await userEvent.click(screen.getByRole('button', { name: /notes\.txt/ }))
+    await userEvent.click(file(/notes\.txt/))
     await waitFor(() => expect(requested).toContain(notesFile.path))
+  })
+
+  it('lists every unit of the selected file, explained or not', async () => {
+    stubAPI()
+    render(<App />)
+
+    // cache.go has two units; only the first carries an explanation, and the
+    // second is listed as unexplained rather than hidden.
+    expect(await screen.findByRole('heading', { name: 'Cache reuse' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Get\(\).*Cache reuse/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /module level.*no explanation/ })).toBeInTheDocument()
+    expect(screen.getByText('1 explained')).toBeInTheDocument()
   })
 
   it('scopes the learning guide to the selected file', async () => {
     stubAPI()
     render(<App />)
 
-    // cache.go has the only step, and the viewer opens there.
     expect(await screen.findByRole('heading', { name: 'Cache reuse' })).toBeInTheDocument()
     expect(screen.getByText('Creation became reuse.')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: /notes\.txt/ }))
+    await userEvent.click(file(/notes\.txt/))
     await waitFor(() =>
-      expect(screen.getByText('No explanation was generated for this file.')).toBeInTheDocument(),
+      expect(screen.getByRole('heading', { name: 'Not explained yet' })).toBeInTheDocument(),
     )
     expect(screen.queryByRole('heading', { name: 'Cache reuse' })).not.toBeInTheDocument()
   })
@@ -67,7 +76,7 @@ describe('viewer', () => {
     ).toBeInTheDocument()
   })
 
-  it('moves the editor when a change unit is selected', async () => {
+  it('moves the editor when a unit is selected in the guide', async () => {
     stubAPI()
     render(<App />)
 
@@ -79,32 +88,31 @@ describe('viewer', () => {
     )
   })
 
-  it('moves to the code of a learning step when the step is selected', async () => {
+  it('walks units with Prev and Next', async () => {
     stubAPI()
     render(<App />)
 
     await screen.findByTestId('diff-editor')
-    await userEvent.click(screen.getByRole('button', { name: /module level/ }))
-    await waitFor(() =>
-      expect(screen.getByTestId('diff-editor')).toHaveTextContent('editor:module level'),
-    )
+    expect(screen.getByText('1 / 2')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByText('Cache reuse'))
-    await waitFor(() => expect(screen.getByTestId('diff-editor')).toHaveTextContent('editor:Get()'))
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(screen.getByText('2 / 2')).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Prev' }))
+    await waitFor(() => expect(screen.getByText('1 / 2')).toBeInTheDocument())
   })
 
   it('keeps the selected file across a refresh', async () => {
     stubAPI()
     render(<App />)
 
-    await screen.findByText('Changed Files (2)')
-    await userEvent.click(screen.getByRole('button', { name: /notes\.txt/ }))
-    const selectedFileLabel = () =>
-      screen.getByText('No explanation was generated for this file.')
-    await waitFor(() => expect(selectedFileLabel()).toBeInTheDocument())
+    await screen.findByText('Changed Files')
+    await userEvent.click(file(/notes\.txt/))
+    const marker = () => screen.getByRole('heading', { name: 'Not explained yet' })
+    await waitFor(() => expect(marker()).toBeInTheDocument())
 
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
-    await waitFor(() => expect(selectedFileLabel()).toBeInTheDocument())
+    await waitFor(() => expect(marker()).toBeInTheDocument())
   })
 
   it('asks the server for a new snapshot only when Refresh is pressed', async () => {
@@ -112,7 +120,7 @@ describe('viewer', () => {
     stubAPI({ onRefresh: () => (refreshes += 1) })
     render(<App />)
 
-    await screen.findByText('Changed Files (2)')
+    await screen.findByText('Changed Files')
     // The initial load reuses the snapshot the CLI already built.
     expect(refreshes).toBe(0)
 
@@ -128,9 +136,7 @@ describe('viewer', () => {
     render(<App />)
 
     expect(await screen.findByText('staged only')).toBeInTheDocument()
-    expect(
-      screen.getByText('staged only - comparing HEAD with the index'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('staged only · HEAD vs index')).toBeInTheDocument()
   })
 
   it('reports an API error', async () => {
@@ -148,5 +154,42 @@ describe('viewer', () => {
     render(<App />)
 
     expect(await screen.findByText('2 step(s) dropped')).toBeInTheDocument()
+  })
+})
+
+describe('layout', () => {
+  it('remembers a pane width the reader dragged', async () => {
+    stubAPI()
+    const { unmount } = render(<App />)
+
+    await screen.findByText('Changed Files')
+    const splitter = screen.getByRole('separator', { name: 'Resize the file list' })
+
+    // jsdom has no layout, so the drag is driven through the pointer events
+    // the splitter listens for.
+    splitter.dispatchEvent(
+      new MouseEvent('pointerdown', { bubbles: true, clientX: 256 }) as PointerEvent,
+    )
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 336 }) as PointerEvent)
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 336 }) as PointerEvent)
+
+    await waitFor(() => expect(window.localStorage.getItem('codelearn.pane.files')).toBe('336'))
+    unmount()
+
+    // A fresh mount picks the stored width back up.
+    render(<App />)
+    await screen.findByText('Changed Files')
+    expect(window.localStorage.getItem('codelearn.pane.files')).toBe('336')
+  })
+
+  it('keeps a stored width inside its bounds', async () => {
+    window.localStorage.setItem('codelearn.pane.files', '5000')
+    stubAPI()
+    render(<App />)
+
+    await screen.findByText('Changed Files')
+    const panel = screen.getByText('Changed Files').closest('aside')
+    // An out-of-range stored value is ignored in favour of the default.
+    expect(panel).toHaveStyle({ width: '256px' })
   })
 })

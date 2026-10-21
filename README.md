@@ -82,9 +82,18 @@ The server binds `127.0.0.1` and picks a free port when the default is taken.
 
 | Pane | Contents |
 | --- | --- |
-| Changed Files | every modified, staged, unstaged, added, deleted, renamed and untracked file |
-| Diff Viewer | side-by-side Before/After in a Monaco diff editor, with one selectable chip per change unit |
-| Learning Guide | the steps for the selected file, with Prev/Next and What / How / Why |
+| Changed Files | every modified, staged, unstaged, added, deleted, renamed and untracked file, with totals |
+| Diff Viewer | side-by-side Before/After in a Monaco diff editor; clicking code selects the unit it belongs to |
+| Learning Guide | every change unit of the selected file, explained or not, with Prev/Next and What / How / Why |
+
+Unit navigation lives in one place. The Learning Guide lists all the units of
+the selected file, so a unit without an explanation is visible as such rather
+than hidden, and Prev/Next walks them in file order before carrying on into
+the next file that has explanations.
+
+Drag the dividers between the panes to rebalance them - a shallow file list
+needs little width, a wide diff needs a lot - and double-click a divider to
+reset it. The widths are remembered per browser.
 
 Staged and unstaged edits to the same file are merged into one entry, untracked
 files show up as new files with an empty Before, and binary files are listed
