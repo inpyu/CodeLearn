@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-label="CodeLearn">
+  <title>CodeLearn</title>
+  <!-- The mark is a diff: two columns of code, one line changed, and a note
+       attached to that line - which is what the tool is for. -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#111621"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="14.25" fill="none"
+        stroke="#2b374d" stroke-width="1.5"/>
+
+  <rect x="31.25" y="16" width="1.5" height="32" rx="0.75" fill="#2b374d"/>
+
+  <g fill="#53617a">
+    <rect x="12" y="19" width="15" height="3.2" rx="1.6"/>
+    <rect x="12" y="35" width="10" height="3.2" rx="1.6"/>
+    <rect x="12" y="43" width="15" height="3.2" rx="1.6"/>
+    <rect x="37" y="19" width="15" height="3.2" rx="1.6"/>
+    <rect x="37" y="35" width="10" height="3.2" rx="1.6"/>
+    <rect x="37" y="43" width="15" height="3.2" rx="1.6"/>
+  </g>
+
+  <rect x="12" y="27" width="12" height="3.2" rx="1.6" fill="#fb7185"/>
+  <rect x="37" y="27" width="12" height="3.2" rx="1.6" fill="#5aa2ff"/>
+  <circle cx="54" cy="28.6" r="2.8" fill="#5aa2ff"/>
+</svg>
